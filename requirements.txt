@@ -9,3 +9,5 @@ fastapi
 uvicorn
 sqlalchemy
 werkzeug
+sentence-transformers
+faiss-cpu

@@ -12,13 +12,18 @@ the preferred locale in the session and all UI labels are translated.
 """
 
 import os
+import pickle
 from functools import partial
 from typing import Iterable, List
+
+import numpy as np
+import faiss
 
 import gradio as gr
 from duckduckgo_search import DDGS
 from llama_cpp import Llama
 from transformers import pipeline
+from sentence_transformers import SentenceTransformer
 import torch
 from pypdf import PdfReader
 from docx import Document
@@ -104,6 +109,40 @@ LOCALES = {
         "subscriber": "Подписка",
     },
 }
+
+# --- Episodic memory setup using FAISS ---
+MEMORY_INDEX_PATH = "memory.index"
+MEMORY_STORE_PATH = "memory.pkl"
+EMBED_MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+if os.path.exists(MEMORY_INDEX_PATH) and os.path.exists(MEMORY_STORE_PATH):
+    memory_index = faiss.read_index(MEMORY_INDEX_PATH)
+    with open(MEMORY_STORE_PATH, "rb") as f:
+        memory_texts = pickle.load(f)
+else:
+    memory_index = faiss.IndexFlatL2(EMBED_MODEL.get_sentence_embedding_dimension())
+    memory_texts: List[str] = []
+
+def _save_memory() -> None:
+    faiss.write_index(memory_index, MEMORY_INDEX_PATH)
+    with open(MEMORY_STORE_PATH, "wb") as f:
+        pickle.dump(memory_texts, f)
+
+def add_to_memory(question: str, answer: str) -> None:
+    """Store a Q&A pair in the semantic memory."""
+    text = f"Q: {question}\nA: {answer}"
+    vector = EMBED_MODEL.encode([text]).astype("float32")
+    memory_index.add(vector)
+    memory_texts.append(text)
+    _save_memory()
+
+def retrieve_memory(query: str, k: int = 3) -> List[str]:
+    """Return similar stored dialogues to the query."""
+    if not memory_texts:
+        return []
+    vector = EMBED_MODEL.encode([query]).astype("float32")
+    _, idx = memory_index.search(vector, k)
+    return [memory_texts[i] for i in idx[0] if i < len(memory_texts)]
 
 # --- Database setup for user accounts ---
 
@@ -200,6 +239,10 @@ def generate_answer(question, image=None, documents=None, chat_history=None, lan
     chat_history = chat_history or []
     context_parts: List[str] = []
 
+    memory_snippets = retrieve_memory(question)
+    if memory_snippets:
+        context_parts.append("Previous dialogues:\n" + "\n".join(memory_snippets))
+
     if image is not None:
         caption = captioner(image)[0]["generated_text"]
         context_parts.append(f"Image description: {caption}")
@@ -230,6 +273,7 @@ def generate_answer(question, image=None, documents=None, chat_history=None, lan
 
     answer = response["choices"][0]["message"]["content"].strip()
     chat_history.append((question, answer))
+    add_to_memory(question, answer)
     return "", chat_history, chat_history
 
 

@@ -6,6 +6,7 @@ This project provides a simple web interface built with [Gradio](https://gradio.
 
 - **Long chain-of-thought reasoning** guided by a custom system prompt.
 - **Retrieval augmented generation (RAG)** using DuckDuckGo web search.
+- **Episodic memory** stores past conversations in a FAISS index for context.
 - **Multimodal input**: optional image uploads are captioned automatically.
 - **Document ingestion**: text, PDF and DOCX files can be uploaded and will be
   included in the context for the language model.
@@ -41,6 +42,10 @@ access the assistant. It will reason step by step about the question, using
 uploaded images and documents, as well as recent web search results. The final
 answer is generated after the reasoning steps and includes a short disclaimer
 that the response should not replace professional medical advice.
+
+Each dialogue is stored in a semantic memory using sentence-transformer
+embeddings and a FAISS index. When you ask a new question, the assistant
+retrieves the most relevant past exchanges to provide additional context.
 
 ## Limitations
 
