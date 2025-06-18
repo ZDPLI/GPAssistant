@@ -6,39 +6,35 @@ from threading import Thread
 
 import cv2
 import gradio as gr
-import spaces
-import torch
 from loguru import logger
 from PIL import Image
-from transformers import AutoProcessor, TextIteratorStreamer, Qwen2_5_VLForConditionalGeneration
-from qwen_vl_utils import process_vision_info
+from llama_cpp import Llama, llama_chat_format
 
-MODEL_ID = os.getenv("MODEL_ID", "lingshu-medical-mllm/Lingshu-7B")
-MODEL_PATH = os.getenv("MODEL_PATH")
-MODEL_CACHE_DIR = os.getenv("MODEL_CACHE_DIR")
-LOCAL_ONLY = bool(MODEL_CACHE_DIR or os.getenv("HF_HUB_OFFLINE"))
+# Paths to model files
+MODEL_PATH = os.getenv("MODEL_PATH", "Lingshu-7B.Q8_0.gguf")
+MM_PROJ_PATH = os.getenv("MM_PROJ_PATH", "Lingshu-7B.mmproj-Q8_0.gguf")
+GPU_LAYERS = int(os.getenv("N_GPU_LAYERS", "100"))
 
-if MODEL_PATH:
-    if not os.path.isdir(MODEL_PATH):
-        raise FileNotFoundError(f"MODEL_PATH does not exist: {MODEL_PATH}")
-    MODEL_ID = MODEL_PATH
-    LOCAL_ONLY = True
-    logger.info("Loading model from local path %s", MODEL_PATH)
+if not os.path.isfile(MODEL_PATH):
+    raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+if not os.path.isfile(MM_PROJ_PATH):
+    raise FileNotFoundError(f"Projection file not found: {MM_PROJ_PATH}")
 
-if LOCAL_ONLY:
-    logger.info("Loading model in offline mode from %s", MODEL_CACHE_DIR or "cache")
+chat_handler = llama_chat_format.Llava15ChatHandler(clip_model_path=MM_PROJ_PATH)
 
-model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-    MODEL_ID,
-    torch_dtype=torch.bfloat16,
-    device_map="auto",
-    cache_dir=MODEL_CACHE_DIR,
-    local_files_only=LOCAL_ONLY,
+llama = Llama(
+    model_path=MODEL_PATH,
+    chat_handler=chat_handler,
+    n_gpu_layers=GPU_LAYERS,
+    n_ctx=4096,
+    n_batch=512,
 )
 
-processor = AutoProcessor.from_pretrained(MODEL_ID, cache_dir=MODEL_CACHE_DIR, local_files_only=LOCAL_ONLY)
-
 MAX_NUM_IMAGES = int(os.getenv("MAX_NUM_IMAGES", "5"))
+
+
+def _url_from_path(path: str) -> str:
+    return f"file://{os.path.abspath(path)}"
 
 
 def count_files_in_new_message(paths: list[str]) -> tuple[int, int]:
@@ -121,7 +117,7 @@ def process_video(video_path: str) -> list[dict]:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
             pil_image.save(temp_file.name)
             content.append({"type": "text", "text": f"Frame {timestamp}:"})
-            content.append({"type": "image", "image": temp_file.name})
+            content.append({"type": "image_url", "image_url": _url_from_path(temp_file.name)})
     logger.debug(f"{content=}")
     return content
 
@@ -134,15 +130,12 @@ def process_interleaved_images(message: dict) -> list[dict]:
     content = []
     image_index = 0
     for part in parts:
-        logger.debug(f"{part=}")
         if part == "<image>":
-            content.append({"type": "image", "image": message["files"][image_index]})
-            logger.debug(f"file: {message['files'][image_index]}")
+            path = message["files"][image_index]
+            content.append({"type": "image_url", "image_url": _url_from_path(path)})
             image_index += 1
         elif part.strip():
             content.append({"type": "text", "text": part.strip()})
-        elif isinstance(part, str) and part != "<image>":
-            content.append({"type": "text", "text": part})
     logger.debug(f"{content=}")
     return content
 
@@ -156,7 +149,7 @@ def process_new_user_message(message: dict) -> list[dict]:
         return process_interleaved_images(message)
     return [
         {"type": "text", "text": message["text"]},
-        *[{"type": "image", "image": path} for path in message["files"]],
+        *[{"type": "image_url", "image_url": _url_from_path(path)} for path in message["files"]],
     ]
 
 
@@ -168,17 +161,34 @@ def process_history(history: list[dict]) -> list[dict]:
             if current_user_content:
                 messages.append({"role": "user", "content": current_user_content})
                 current_user_content = []
-            messages.append({"role": "assistant", "content": [{"type": "text", "text": item["content"]}]})
+            messages.append({"role": "assistant", "content": item["content"]})
         else:
             content = item["content"]
             if isinstance(content, str):
                 current_user_content.append({"type": "text", "text": content})
             else:
-                current_user_content.append({"type": "image", "image": content[0]})
+                current_user_content.append({"type": "image_url", "image_url": _url_from_path(content[0])})
+    if current_user_content:
+        messages.append({"role": "user", "content": current_user_content})
     return messages
 
 
-@spaces.GPU(duration=120)
+def generate_stream(messages: list[dict], max_new_tokens: int) -> Iterator[str]:
+    stream = llama.create_chat_completion(
+        messages=messages,
+        temperature=0.7,
+        top_p=0.9,
+        max_tokens=max_new_tokens,
+        stream=True,
+    )
+    output = ""
+    for chunk in stream:
+        delta = chunk["choices"][0]["delta"].get("content", "")
+        output += delta
+        yield output
+
+
+@gr.experimental.Function
 def run(message: dict, history: list[dict], system_prompt: str = "", max_new_tokens: int = 2048) -> Iterator[str]:
     if not validate_media_constraints(message, history):
         yield ""
@@ -186,44 +196,17 @@ def run(message: dict, history: list[dict], system_prompt: str = "", max_new_tok
 
     messages = []
     if system_prompt:
-        messages.append({"role": "system", "content": [{"type": "text", "text": system_prompt}]})
+        messages.append({"role": "system", "content": system_prompt})
     messages.extend(process_history(history))
     messages.append({"role": "user", "content": process_new_user_message(message)})
 
-    text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    image_inputs, video_inputs = process_vision_info(messages)
-    inputs = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
-        padding=True,
-        return_tensors="pt",
-    )
-    inputs = inputs.to(model.device)
-
-    streamer = TextIteratorStreamer(processor, timeout=30.0, skip_prompt=True, skip_special_tokens=True)
-    generate_kwargs = dict(
-        inputs,
-        max_new_tokens=max_new_tokens,
-        streamer=streamer,
-        temperature=0.7,
-        top_p=1,
-        repetition_penalty=1,
-    )
-    t = Thread(target=model.generate, kwargs=generate_kwargs)
-    t.start()
-
-    output = ""
-    for delta in streamer:
-        output += delta
-        yield output
+    for delta in generate_stream(messages, max_new_tokens):
+        yield delta
 
 
 DESCRIPTION = """\
-This is a demo of Lingshu 7B, a multimodal model trained for performance on medical text and image comprehension.
-Lingshu supports more than 12 medical imaging modalities, including X-Ray, CT Scan, MRI, Microscopy, Ultrasound, Histopathology, Dermoscopy, Fundus, OCT, Digital Photography, Endoscopy, and PET.
+This is a demo of Lingshu 7B running with llama-cpp and GPU acceleration.\
+Upload images or a short video and ask questions in text.\
 """
 
 demo = gr.ChatInterface(
@@ -234,7 +217,7 @@ demo = gr.ChatInterface(
     multimodal=True,
     additional_inputs=[
         gr.Textbox(label="System Prompt", value="You are a helpful medical expert."),
-        gr.Slider(label="Max New Tokens", minimum=100, maximum=8192, step=10, value=2048),
+        gr.Slider(label="Max New Tokens", minimum=100, maximum=4096, step=10, value=2048),
     ],
     stop_btn=False,
     title="Lingshu 7B",

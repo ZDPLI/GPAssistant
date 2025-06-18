@@ -1,7 +1,5 @@
-torch
 gradio
-transformers
-spaces
 loguru
+llama-cpp-python>=0.2.73
 opencv-python-headless
 pillow
