@@ -1,2 +1,11 @@
 torch
 gradio
+duckduckgo-search
+transformers
+llama-cpp-python
+pypdf
+python-docx
+fastapi
+uvicorn
+sqlalchemy
+werkzeug

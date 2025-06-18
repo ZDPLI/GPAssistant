@@ -1,0 +1,399 @@
+"""Web application for a medical assistant using the Lingshu-7B model.
+
+In addition to the Gradio chat interface, this file now provides a very
+small user management layer built with FastAPI. Users can register and log
+in, their passwords are stored as salted hashes in a SQLite database and a
+simple session cookie is used for authentication. An optional admin panel
+allows toggling subscription status for each user. Only subscribed users can
+access the chat interface.
+
+The interface supports English and Russian locales. A language switch stores
+the preferred locale in the session and all UI labels are translated.
+"""
+
+import os
+from functools import partial
+from typing import Iterable, List
+
+import gradio as gr
+from duckduckgo_search import DDGS
+from llama_cpp import Llama
+from transformers import pipeline
+import torch
+from pypdf import PdfReader
+from docx import Document
+
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    String,
+    Boolean,
+)
+from sqlalchemy.orm import sessionmaker, declarative_base
+from werkzeug.security import generate_password_hash, check_password_hash
+
+# Load image captioning model
+captioner = pipeline(
+    "image-to-text",
+    model="Salesforce/blip-image-captioning-base",
+    device=0 if torch.cuda.is_available() else -1,
+)
+
+# System prompts for both locales. The text is roughly equivalent in Russian
+# and English and instructs the model to reason thoroughly before answering.
+SYSTEM_PROMPT_EN = (
+    "You are DoctorGPT, an AI assistant helping clinicians. "
+    "Reason carefully step by step, using information from the "
+    "conversation, uploaded documents and web search results. "
+    "Always summarise your reasoning before the final answer and "
+    "include a short disclaimer that your response is not a "
+    "substitute for professional medical advice."
+)
+
+SYSTEM_PROMPT_RU = (
+    "Вы DoctorGPT, ИИ-помощник для врачей. "
+    "Думайте осторожно и пошагово, используя информацию из беседы, "
+    "загруженных документов и результатов веб-поиска. Всегда кратко "
+    "пересказывайте своё рассуждение перед финальным ответом и "
+    "добавляйте предупреждение, что ответ не заменяет консультацию "
+    "специалиста."
+)
+
+SYSTEM_PROMPT = {"en": SYSTEM_PROMPT_EN, "ru": SYSTEM_PROMPT_RU}
+
+# Simple localisation dictionary for UI texts.
+LOCALES = {
+    "en": {
+        "title": "Medical Multimodal Assistant",
+        "ask": "Ask a question",
+        "image": "Upload an image (optional)",
+        "docs": "Upload documents",
+        "send": "Send",
+        "subscription_required": "An active subscription is required to access the assistant.",
+        "login": "Login",
+        "register": "Register",
+        "username": "Username",
+        "password": "Password",
+        "submit": "Submit",
+        "logout": "Logout",
+        "admin_panel": "Admin panel",
+        "not_admin": "Admin access required.",
+        "users": "Users",
+        "subscriber": "Subscriber",
+    },
+    "ru": {
+        "title": "Медицинский мультимодальный ассистент",
+        "ask": "Задайте вопрос",
+        "image": "Загрузите изображение (необязательно)",
+        "docs": "Загрузите документы",
+        "send": "Отправить",
+        "subscription_required": "Для доступа к ассистенту требуется активная подписка.",
+        "login": "Вход",
+        "register": "Регистрация",
+        "username": "Имя пользователя",
+        "password": "Пароль",
+        "submit": "Отправить",
+        "logout": "Выйти",
+        "admin_panel": "Панель администратора",
+        "not_admin": "Требуются права администратора.",
+        "users": "Пользователи",
+        "subscriber": "Подписка",
+    },
+}
+
+# --- Database setup for user accounts ---
+
+Base = declarative_base()
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String, unique=True)
+    password_hash = Column(String)
+    is_admin = Column(Boolean, default=False)
+    is_subscriber = Column(Boolean, default=False)
+
+
+engine = create_engine("sqlite:///users.db")
+Base.metadata.create_all(bind=engine)
+SessionLocal = sessionmaker(bind=engine)
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_lang(request: Request) -> str:
+    return request.session.get("lang", "en")
+
+
+def set_lang(request: Request, lang: str) -> None:
+    if lang in LOCALES:
+        request.session["lang"] = lang
+
+
+def get_current_user(request: Request):
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return None
+    with SessionLocal() as db:
+        return db.query(User).filter(User.id == user_id).first()
+
+# Path to GGUF model file
+MODEL_PATH = os.getenv("MODEL_PATH", "models/Lingshu-7B-Q4_0.gguf")
+
+# Load Llama model
+llm = Llama(model_path=MODEL_PATH, n_ctx=4096)
+
+def search_web(query, k=3):
+    """Return web search summaries using DuckDuckGo."""
+    results = []
+    with DDGS() as ddgs:
+        for r in ddgs.text(query, max_results=k):
+            results.append(f"{r['title']}: {r['body']} ({r['href']})")
+    return "\n".join(results)
+
+
+def _extract_text_from_pdf(path: str) -> str:
+    """Return extracted text from a PDF file."""
+    reader = PdfReader(path)
+    return "\n".join(
+        page.extract_text() or "" for page in reader.pages
+    )
+
+
+def _extract_text_from_docx(path: str) -> str:
+    """Return extracted text from a docx file."""
+    doc = Document(path)
+    return "\n".join(p.text for p in doc.paragraphs)
+
+
+def load_documents(files: Iterable[gr.File]) -> str:
+    """Concatenate text extracted from uploaded files."""
+    texts: List[str] = []
+    for f in files or []:
+        if not f:
+            continue
+        path = f.name
+        if path.endswith(".pdf"):
+            texts.append(_extract_text_from_pdf(path))
+        elif path.endswith(".docx"):
+            texts.append(_extract_text_from_docx(path))
+        else:  # assume plain text
+            with open(path, "r", errors="ignore") as fh:
+                texts.append(fh.read())
+    return "\n".join(texts)
+
+def generate_answer(question, image=None, documents=None, chat_history=None, lang="en"):
+    """Generate a response given user question, image and documents."""
+
+    chat_history = chat_history or []
+    context_parts: List[str] = []
+
+    if image is not None:
+        caption = captioner(image)[0]["generated_text"]
+        context_parts.append(f"Image description: {caption}")
+
+    if documents:
+        docs_text = load_documents(documents)
+        if docs_text:
+            context_parts.append(f"Document excerpts:\n{docs_text}")
+
+    search_context = search_web(question)
+    context_parts.append(f"Search results:\n{search_context}")
+    context = "\n".join(context_parts)
+
+    user_prompt = (
+        f"Question: {question}\n\nContext:\n{context}\n\n"
+        "Please reason step by step, then give your final answer prefixed "
+        "with 'Final Answer:'."
+    )
+
+    response = llm.create_chat_completion(
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT.get(lang, SYSTEM_PROMPT_EN)},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.7,
+        max_tokens=768,
+    )
+
+    answer = response["choices"][0]["message"]["content"].strip()
+    chat_history.append((question, answer))
+    return "", chat_history, chat_history
+
+
+def create_demo(lang: str) -> gr.Blocks:
+    texts = LOCALES[lang]
+    with gr.Blocks() as demo:
+        gr.Markdown(f"# {texts['title']}")
+        chatbot = gr.Chatbot()
+        state = gr.State([])
+
+        with gr.Row():
+            txt = gr.Textbox(label=texts['ask'])
+            img = gr.Image(type="pil", label=texts['image'])
+        docs = gr.File(label=texts['docs'], file_count="multiple")
+        send = gr.Button(texts['send'])
+
+        send.click(
+            partial(generate_answer, lang=lang),
+            inputs=[txt, img, docs, state],
+            outputs=[txt, chatbot, state],
+        )
+    return demo
+
+
+app = FastAPI()
+SECRET_KEY = os.getenv("SECRET_KEY", "change-me")
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+
+
+demo_en = create_demo("en")
+demo_ru = create_demo("ru")
+
+app = gr.mount_gradio_app(app, demo_en, path="/chat/en")
+app = gr.mount_gradio_app(app, demo_ru, path="/chat/ru")
+
+
+def render_template(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(f"<html><head><title>{title}</title></head><body>{body}</body></html>")
+
+
+@app.get("/set_lang/{lang}")
+async def set_language(request: Request, lang: str):
+    set_lang(request, lang)
+    return RedirectResponse("/", status_code=302)
+
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_form(request: Request):
+    lang = get_lang(request)
+    t = LOCALES[lang]
+    body = (
+        f"<h2>{t['register']}</h2>"
+        f"<form method='post'>"
+        f"<label>{t['username']}</label><input name='username'/><br/>"
+        f"<label>{t['password']}</label><input type='password' name='password'/><br/>"
+        f"<button type='submit'>{t['submit']}</button>"
+        f"</form>"
+        f"<a href='/login'>{t['login']}</a>"
+    )
+    return render_template(t['register'], body)
+
+
+@app.post("/register", response_class=HTMLResponse)
+async def register(request: Request, username: str = Form(...), password: str = Form(...)):
+    lang = get_lang(request)
+    with SessionLocal() as db:
+        if db.query(User).filter(User.username == username).first():
+            return render_template("error", "User exists")
+        user = User(
+            username=username,
+            password_hash=generate_password_hash(password),
+            is_admin=False,
+            is_subscriber=False,
+        )
+        db.add(user)
+        db.commit()
+    return RedirectResponse("/login", status_code=302)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_form(request: Request):
+    lang = get_lang(request)
+    t = LOCALES[lang]
+    body = (
+        f"<h2>{t['login']}</h2>"
+        f"<form method='post'>"
+        f"<label>{t['username']}</label><input name='username'/><br/>"
+        f"<label>{t['password']}</label><input type='password' name='password'/><br/>"
+        f"<button type='submit'>{t['submit']}</button>"
+        f"</form>"
+        f"<a href='/register'>{t['register']}</a>"
+    )
+    return render_template(t['login'], body)
+
+
+@app.post("/login")
+async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == username).first()
+        if not user or not check_password_hash(user.password_hash, password):
+            return render_template("error", "Invalid credentials")
+        request.session["user_id"] = user.id
+    return RedirectResponse("/", status_code=302)
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=302)
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_panel(request: Request):
+    lang = get_lang(request)
+    t = LOCALES[lang]
+    user = get_current_user(request)
+    if not user or not user.is_admin:
+        return render_template(t['admin_panel'], t['not_admin'])
+    rows = []
+    with SessionLocal() as db:
+        for u in db.query(User).all():
+            toggle_link = f"/toggle_sub/{u.id}"
+            rows.append(
+                f"<tr><td>{u.username}</td><td>{'✔' if u.is_subscriber else ''}</td>"
+                f"<td><a href='{toggle_link}'>{t['subscriber']}</a></td></tr>"
+            )
+    table = "<table>" + "".join(rows) + "</table>"
+    body = f"<h2>{t['admin_panel']}</h2>" + table + f"<a href='/'>{t['logout']}</a>"
+    return render_template(t['admin_panel'], body)
+
+
+@app.get("/toggle_sub/{user_id}")
+async def toggle_subscription(request: Request, user_id: int):
+    user = get_current_user(request)
+    if not user or not user.is_admin:
+        return RedirectResponse("/", status_code=302)
+    with SessionLocal() as db:
+        target = db.query(User).get(user_id)
+        if target:
+            target.is_subscriber = not target.is_subscriber
+            db.add(target)
+            db.commit()
+    return RedirectResponse("/admin", status_code=302)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    lang = get_lang(request)
+    t = LOCALES[lang]
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse("/login")
+    if not user.is_subscriber:
+        body = f"<p>{t['subscription_required']}</p><a href='/logout'>{t['logout']}</a>"
+        return render_template(t['title'], body)
+    body = (
+        f"<h2>{t['title']}</h2>"
+        f"<p><a href='/chat/en'>English</a> | <a href='/chat/ru'>Русский</a></p>"
+        f"<p><a href='/admin'>{t['admin_panel']}</a></p>"
+        f"<p><a href='/logout'>{t['logout']}</a></p>"
+    )
+    return render_template(t['title'], body)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
