@@ -14,8 +14,16 @@ from transformers import AutoProcessor, TextIteratorStreamer, Qwen2_5_VLForCondi
 from qwen_vl_utils import process_vision_info
 
 MODEL_ID = os.getenv("MODEL_ID", "lingshu-medical-mllm/Lingshu-7B")
+MODEL_PATH = os.getenv("MODEL_PATH")
 MODEL_CACHE_DIR = os.getenv("MODEL_CACHE_DIR")
 LOCAL_ONLY = bool(MODEL_CACHE_DIR or os.getenv("HF_HUB_OFFLINE"))
+
+if MODEL_PATH:
+    if not os.path.isdir(MODEL_PATH):
+        raise FileNotFoundError(f"MODEL_PATH does not exist: {MODEL_PATH}")
+    MODEL_ID = MODEL_PATH
+    LOCAL_ONLY = True
+    logger.info("Loading model from local path %s", MODEL_PATH)
 
 if LOCAL_ONLY:
     logger.info("Loading model in offline mode from %s", MODEL_CACHE_DIR or "cache")

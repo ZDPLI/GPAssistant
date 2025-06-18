@@ -14,15 +14,18 @@ This project provides a simple Gradio chat interface for the [Lingshu-7B](https:
    ```bash
    pip install -r requirements.txt
    ```
-2. (Optional) Pre-download the model to avoid network timeouts:
+2. (Optional) Pre-download the model or point to an existing local copy to avoid
+   Hugging Face timeouts:
    ```bash
    huggingface-cli download lingshu-medical-mllm/Lingshu-7B --local-dir ./model --local-dir-use-symlinks False
-   export MODEL_CACHE_DIR="$(pwd)/model"
+   export MODEL_PATH="$(pwd)/model"
+   export MODEL_CACHE_DIR="$MODEL_PATH"  # optional cache location
    export HF_HUB_OFFLINE=1
    ```
-   Set `MODEL_ID` if you want to use a different checkpoint.
-   The app automatically loads the model from `MODEL_CACHE_DIR` and
-   runs in offline mode when this variable is present.
+   If `MODEL_PATH` is set to a directory with the model files, the application
+   will load them directly from disk in offline mode. Optionally set
+   `MODEL_CACHE_DIR` to reuse that directory as the Transformers cache. You can
+   still override the checkpoint with `MODEL_ID` if needed.
 3. Run the application:
    ```bash
    python app.py
