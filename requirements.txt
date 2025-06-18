@@ -1,13 +1,7 @@
 torch
 gradio
-duckduckgo-search
 transformers
-pypdf
-python-docx
-fastapi
-uvicorn
-sqlalchemy
-werkzeug
-sentence-transformers
-faiss-cpu
-sentencepiece
+spaces
+loguru
+opencv-python-headless
+pillow
