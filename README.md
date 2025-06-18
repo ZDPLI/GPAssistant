@@ -14,10 +14,19 @@ This project provides a simple Gradio chat interface for the [Lingshu-7B](https:
    ```bash
    pip install -r requirements.txt
    ```
-2. Run the application:
+2. (Optional) Pre-download the model to avoid network timeouts:
+   ```bash
+   huggingface-cli download lingshu-medical-mllm/Lingshu-7B --local-dir ./model --local-dir-use-symlinks False
+   export MODEL_CACHE_DIR="$(pwd)/model"
+   export HF_HUB_OFFLINE=1
+   ```
+   Set `MODEL_ID` if you want to use a different checkpoint.
+   The app automatically loads the model from `MODEL_CACHE_DIR` and
+   runs in offline mode when this variable is present.
+3. Run the application:
    ```bash
    python app.py
    ```
-3. Open the printed local URL in your browser.
+4. Open the printed local URL in your browser.
 
 You can adjust the maximum number of images processed from a video by setting `MAX_NUM_IMAGES` in your environment.

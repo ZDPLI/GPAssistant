@@ -10,16 +10,25 @@ import spaces
 import torch
 from loguru import logger
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForImageTextToText, TextIteratorStreamer, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoProcessor, TextIteratorStreamer, Qwen2_5_VLForConditionalGeneration
 from qwen_vl_utils import process_vision_info
 
+MODEL_ID = os.getenv("MODEL_ID", "lingshu-medical-mllm/Lingshu-7B")
+MODEL_CACHE_DIR = os.getenv("MODEL_CACHE_DIR")
+LOCAL_ONLY = bool(MODEL_CACHE_DIR or os.getenv("HF_HUB_OFFLINE"))
+
+if LOCAL_ONLY:
+    logger.info("Loading model in offline mode from %s", MODEL_CACHE_DIR or "cache")
+
 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-    "lingshu-medical-mllm/Lingshu-7B",
+    MODEL_ID,
     torch_dtype=torch.bfloat16,
     device_map="auto",
+    cache_dir=MODEL_CACHE_DIR,
+    local_files_only=LOCAL_ONLY,
 )
 
-processor = AutoProcessor.from_pretrained("lingshu-medical-mllm/Lingshu-7B")
+processor = AutoProcessor.from_pretrained(MODEL_ID, cache_dir=MODEL_CACHE_DIR, local_files_only=LOCAL_ONLY)
 
 MAX_NUM_IMAGES = int(os.getenv("MAX_NUM_IMAGES", "5"))
 
