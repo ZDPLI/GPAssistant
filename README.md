@@ -1,13 +1,13 @@
 # Medical Multimodal Assistant
 
-This project provides a simple web interface built with [Gradio](https://gradio.app) for interacting with the **Lingshu-7B** model (GGUF format) via `llama-cpp`. The assistant is designed to help clinicians with general questions and supports reasoning over multiple modalities.
+This project provides a simple web interface built with [Gradio](https://gradio.app) for interacting with the **Lingshu-7B** model using the Hugging Face `transformers` library. The assistant is designed to help clinicians with general questions and supports reasoning over multiple modalities.
 
 ## Features
 
 - **Long chain-of-thought reasoning** guided by a custom system prompt.
 - **Retrieval augmented generation (RAG)** using DuckDuckGo web search.
 - **Episodic memory** stores past conversations in a FAISS index for context.
-- **Multimodal input**: images are processed directly by the Lingshu model.
+- **Multimodal input**: images are handled by the model's built-in vision encoder when provided.
 - **Document ingestion**: text, PDF and DOCX files can be uploaded and will be
   included in the context for the language model.
 - **User accounts**: visitors must register and log in. Only subscribed users
@@ -18,8 +18,8 @@ This project provides a simple web interface built with [Gradio](https://gradio.
   parameters such as temperature and top-p.
 
 The application detects a CUDA-enabled GPU and will use it automatically for
-faster inference. You can control how many layers of the model are offloaded to
-GPU via the `N_GPU_LAYERS` environment variable.
+faster inference when available using `AutoModelForCausalLM` with
+`device_map="auto"`.
 
 ## Usage
 
@@ -27,34 +27,20 @@ GPU via the `N_GPU_LAYERS` environment variable.
    ```bash
    pip install -r requirements.txt
    ```
-   Building `llama-cpp-python` requires a C++ compiler and other development
-   libraries. For GPU acceleration, set the environment variable
-   `LLAMA_CUBLAS=1` before installing so the package is compiled with CUDA
-   support. Installation may fail if CUDA toolkits are missing.
-2. Download the Lingshu-7B GGUF model **and** the accompanying multimodal
-   projection file from
-   [Hugging Face](https://huggingface.co/mradermacher/Lingshu-7B-GGUF). A
-   convenient way is:
+2. Download the Lingshu-7B model from
+   [Hugging Face](https://huggingface.co/lingshu-medical-mllm/Lingshu-7B).
+   An easy way is:
    ```bash
-   wget -O models/Lingshu-7B-Q4_0.gguf \
-     https://huggingface.co/mradermacher/Lingshu-7B-GGUF/resolve/main/Lingshu-7B-Q4_0.gguf
+   git clone https://huggingface.co/lingshu-medical-mllm/Lingshu-7B models/Lingshu-7B
    ```
-   wget -O models/Lingshu-7B.mmproj-Q8_0.gguf \
-     https://huggingface.co/mradermacher/Lingshu-7B-GGUF/resolve/main/Lingshu-7B.mmproj-Q8_0.gguf
-   ```
-   Then set the `MODEL_PATH` and `MM_PROJ_PATH` environment variables to these
-   files (defaults shown above). The app will check that both paths exist on startup.
+   Set the `MODEL_PATH` environment variable to the downloaded directory (default shown above).
 3. Set a random `SECRET_KEY` environment variable for session cookies.
-4. (Optional) Set `N_GPU_LAYERS` to control how many layers of the model are
-   offloaded to GPU. By default all GPU memory is used when available.
-5. (Optional) Set `CONTEXT_SIZE` to change the model context window size
-   (default: 4096 tokens).
-6. Run the app:
+4. Run the app:
    ```bash
    uvicorn app:app --host 0.0.0.0 --port 8000
    ```
-7. To create a temporary public link, set the environment variable `SHARE=true` before running. A URL will be printed in the console.
-8. Open the URL printed by Uvicorn in your browser (default: `http://localhost:8000`).
+5. To create a temporary public link, set the environment variable `SHARE=true` before running. A URL will be printed in the console.
+6. Open the URL printed by Uvicorn in your browser (default: `http://localhost:8000`).
 
 Open `/register` to create your first account, then log in at `/login`.
 Users marked as `is_subscriber` can access the assistant. Admin users can
@@ -95,7 +81,7 @@ This project is provided as-is for educational purposes.
 2. Run the container, mounting the model directory and setting environment variables:
    ```bash
    docker run -p 8000:8000 \
-     -e MODEL_PATH=/models/Lingshu-7B-Q4_0.gguf \
+     -e MODEL_PATH=/models/Lingshu-7B \
      -e SECRET_KEY=$(openssl rand -hex 16) \
      -v /path/to/models:/models \
      medical-assistant

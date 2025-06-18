@@ -1,7 +1,7 @@
 torch
 gradio
 duckduckgo-search
-llama-cpp-python>=0.2.36
+transformers
 pypdf
 python-docx
 fastapi
