@@ -9,8 +9,13 @@ import gradio as gr
 from loguru import logger
 from PIL import Image
 from llama_cpp import Llama, llama_chat_format
-from transformers import pipeline
 import torch
+from sentence_transformers import SentenceTransformer
+import faiss
+from duckduckgo_search import DDGS
+import pdfplumber
+import docx
+import pickle
 
 # Paths to model files
 MODEL_PATH = os.getenv("MODEL_PATH", "Lingshu-7B.Q8_0.gguf")
@@ -32,41 +37,88 @@ llama = Llama(
     n_batch=512,
 )
 
-# Translation pipelines for Russian <-> English
-device = 0 if torch.cuda.is_available() else -1
-ru_to_en = pipeline("translation", model="Helsinki-NLP/opus-mt-ru-en", device=device)
-en_to_ru = pipeline("translation", model="Helsinki-NLP/opus-mt-en-ru", device=device)
+# Embedding setup for episodic memory
+embed_device = "cuda" if torch.cuda.is_available() else "cpu"
+embedder = SentenceTransformer(
+    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    device=embed_device,
+)
+FAISS_INDEX = "memory.index"
+FAISS_TEXTS = "memory.pkl"
+if os.path.exists(FAISS_INDEX) and os.path.exists(FAISS_TEXTS):
+    index = faiss.read_index(FAISS_INDEX)
+    with open(FAISS_TEXTS, "rb") as f:
+        memory_texts = pickle.load(f)
+else:
+    index = faiss.IndexFlatL2(embedder.get_sentence_embedding_dimension())
+    memory_texts = []
 
 MAX_NUM_IMAGES = int(os.getenv("MAX_NUM_IMAGES", "5"))
 
 
-def translate_to_en(text: str) -> str:
-    """Translate Russian text to English."""
-    try:
-        return ru_to_en(text)[0]["translation_text"]
-    except Exception:
-        return text
+def add_to_memory(text: str) -> None:
+    embedding = embedder.encode([text])
+    index.add(embedding)
+    memory_texts.append(text)
+    faiss.write_index(index, FAISS_INDEX)
+    with open(FAISS_TEXTS, "wb") as f:
+        pickle.dump(memory_texts, f)
 
 
-def translate_to_ru(text: str) -> str:
-    """Translate English text to Russian."""
+def search_memory(query: str, top_k: int = 3) -> list[str]:
+    if index.ntotal == 0:
+        return []
+    embedding = embedder.encode([query])
+    distances, ids = index.search(embedding, top_k)
+    return [memory_texts[i] for i in ids[0] if i != -1]
+
+
+def web_search(query: str, num_results: int = 3) -> list[str]:
+    results = []
+    with DDGS() as ddgs:
+        for r in ddgs.text(query, max_results=num_results):
+            results.append(f"{r['title']}: {r['href']}")
+    return results
+
+
+def extract_text_from_file(path: str) -> str:
     try:
-        return en_to_ru(text)[0]["translation_text"]
-    except Exception:
-        return text
+        if path.lower().endswith(".pdf"):
+            with pdfplumber.open(path) as pdf:
+                return "\n".join(page.extract_text() or "" for page in pdf.pages)
+        if path.lower().endswith(".docx"):
+            doc = docx.Document(path)
+            return "\n".join(p.text for p in doc.paragraphs)
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except Exception as e:
+        logger.error(f"Failed to parse {path}: {e}")
+        return ""
+
+
+def handle_docs(paths: list[str]) -> None:
+    for path in paths:
+        if path.lower().endswith((".pdf", ".docx", ".txt")):
+            text = extract_text_from_file(path)
+            if text:
+                add_to_memory(text)
 
 
 def _url_from_path(path: str) -> str:
     return f"file://{os.path.abspath(path)}"
 
 
+def _is_image(path: str) -> bool:
+    return path.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"))
+
+
 def count_files_in_new_message(paths: list[str]) -> tuple[int, int]:
     image_count = 0
     video_count = 0
     for path in paths:
-        if path.endswith(".mp4"):
+        if path.lower().endswith(".mp4"):
             video_count += 1
-        else:
+        elif _is_image(path):
             image_count += 1
     return image_count, video_count
 
@@ -77,9 +129,10 @@ def count_files_in_history(history: list[dict]) -> tuple[int, int]:
     for item in history:
         if item["role"] != "user" or isinstance(item["content"], str):
             continue
-        if item["content"][0].endswith(".mp4"):
+        path = item["content"][0]
+        if path.lower().endswith(".mp4"):
             video_count += 1
-        else:
+        elif _is_image(path):
             image_count += 1
     return image_count, video_count
 
@@ -164,17 +217,18 @@ def process_interleaved_images(message: dict) -> list[dict]:
 
 
 def process_new_user_message(message: dict) -> list[dict]:
-    text_en = translate_to_en(message["text"])
-    if not message["files"]:
-        return [{"type": "text", "text": text_en}]
-    if message["files"][0].endswith(".mp4"):
-        return [{"type": "text", "text": text_en}, *process_video(message["files"][0])]
+    text = message["text"]
+    files = [p for p in message["files"] if _is_image(p) or p.lower().endswith(".mp4")]
+    if not files:
+        return [{"type": "text", "text": text}]
+    if files[0].lower().endswith(".mp4"):
+        return [{"type": "text", "text": text}, *process_video(files[0])]
     if "<image>" in message["text"]:
-        message_local = {"text": text_en, "files": message["files"]}
+        message_local = {"text": text, "files": [p for p in files if _is_image(p)]}
         return process_interleaved_images(message_local)
     return [
-        {"type": "text", "text": text_en},
-        *[{"type": "image_url", "image_url": _url_from_path(path)} for path in message["files"]],
+        {"type": "text", "text": text},
+        *[{"type": "image_url", "image_url": _url_from_path(path)} for path in files if _is_image(path)],
     ]
 
 
@@ -187,8 +241,7 @@ def process_history(history: list[dict]) -> list[dict]:
                 messages.append({"role": "user", "content": current_user_content})
                 current_user_content = []
             if isinstance(item["content"], str):
-                assistant_text = translate_to_en(item["content"])
-                messages.append({"role": "assistant", "content": assistant_text})
+                messages.append({"role": "assistant", "content": item["content"]})
             else:
                 messages.append({"role": "assistant", "content": item["content"]})
         else:
@@ -216,7 +269,7 @@ def generate_stream(messages: list[dict], max_new_tokens: int) -> Iterator[str]:
     for chunk in stream:
         delta = chunk["choices"][0]["delta"].get("content", "")
         output += delta
-        yield translate_to_ru(output)
+        yield output
 
 
 @gr.experimental.Function
@@ -225,14 +278,31 @@ def run(message: dict, history: list[dict], system_prompt: str = "", max_new_tok
         yield ""
         return
 
+    handle_docs(message["files"])
+
     messages = []
     if system_prompt:
-        messages.append({"role": "system", "content": translate_to_en(system_prompt)})
+        messages.append({"role": "system", "content": system_prompt})
     messages.extend(process_history(history))
+
+    context_parts = []
+    retrieved = search_memory(message["text"])
+    if retrieved:
+        context_parts.append("Memory:\n" + "\n".join(retrieved))
+    search_results = web_search(message["text"])
+    if search_results:
+        context_parts.append("Web search:\n" + "\n".join(search_results))
+    if context_parts:
+        messages.append({"role": "system", "content": "\n\n".join(context_parts)})
+
     messages.append({"role": "user", "content": process_new_user_message(message)})
 
+    output_text = ""
     for delta in generate_stream(messages, max_new_tokens):
+        output_text = delta
         yield delta
+
+    add_to_memory(f"Q: {message['text']}\nA: {output_text}")
 
 
 DESCRIPTION = """\

@@ -1,8 +1,8 @@
 # Medical Multimodal Assistant
 
-This project demonstrates the **Lingshu‑7B** multimodal model running locally with [llama.cpp](https://github.com/ggerganov/llama.cpp).  The web UI is built with Gradio and allows questions about uploaded medical images or a short video.  The model runs with GPU acceleration when available.
+This project demonstrates the **Lingshu‑7B** multimodal model running locally with [llama.cpp](https://github.com/ggerganov/llama.cpp).  The web UI follows a ChatGPT-style layout and accepts medical images or a short video.  The model runs with GPU acceleration when available.
 
-All user questions are translated to **English** before being passed to the model. Generated answers are translated back to **Russian** so the chat interface remains entirely in Russian.
+Uploaded documents (PDF, DOCX or text) are indexed for retrieval‑augmented generation (RAG). The assistant can also perform web searches to enrich its answers.
 
 ## Requirements
 
@@ -44,3 +44,7 @@ python app.py
 ```
 
 Open the printed URL in your browser to chat with the assistant.  You can change the maximum number of images processed from a video with the `MAX_NUM_IMAGES` environment variable.
+
+### Episodic memory and documents
+
+Uploaded PDF, DOCX or text files are parsed and stored in a local FAISS index (`memory.index`).  The assistant retrieves the most relevant snippets for each question and combines them with optional web search results from DuckDuckGo.

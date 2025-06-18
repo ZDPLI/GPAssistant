@@ -4,4 +4,8 @@ llama-cpp-python>=0.2.73
 opencv-python-headless
 pillow
 torch
-transformers[sentencepiece]
+faiss-cpu
+sentence-transformers
+duckduckgo_search
+pdfplumber
+python-docx
