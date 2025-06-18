@@ -14,6 +14,8 @@ This project provides a simple web interface built with [Gradio](https://gradio.
   can access the assistant.
 - **Admin panel** for managing subscriptions.
 - **Russian and English locales** with a simple language switch.
+- **LM Studio style interface** with dark theme and adjustable decoding
+  parameters such as temperature and top-p.
 
 The application detects a CUDA-enabled GPU and will use it automatically for
 faster inference. You can control how many layers of the model are offloaded to
@@ -35,11 +37,13 @@ GPU via the `N_GPU_LAYERS` environment variable.
 3. Set a random `SECRET_KEY` environment variable for session cookies.
 4. (Optional) Set `N_GPU_LAYERS` to control how many layers of the model are
    offloaded to GPU. By default all GPU memory is used when available.
-5. Run the app:
+5. (Optional) Set `CONTEXT_SIZE` to change the model context window size
+   (default: 4096 tokens).
+6. Run the app:
    ```bash
    uvicorn app:app --host 0.0.0.0 --port 8000
    ```
-6. Open the URL printed by Uvicorn in your browser (default: `http://localhost:8000`).
+7. Open the URL printed by Uvicorn in your browser (default: `http://localhost:8000`).
 
 Open `/register` to create your first account, then log in at `/login`.
 Users marked as `is_subscriber` can access the assistant. Admin users can
@@ -50,6 +54,10 @@ access the assistant. It will reason step by step about the question, using
 uploaded images and documents, as well as recent web search results. The final
 answer is generated after the reasoning steps and includes a short disclaimer
 that the response should not replace professional medical advice.
+
+Click the **Advanced** section in the chat interface to adjust decoding options
+such as temperature, top-p, top-k and the system prompt. This mimics the
+controls offered in LM Studio for experimentation.
 
 Each dialogue is stored in a semantic memory using sentence-transformer
 embeddings and a FAISS index. When you ask a new question, the assistant

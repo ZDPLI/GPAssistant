@@ -1,14 +1,12 @@
-"""Web application for a medical assistant using the Lingshu-7B model.
+"""Medical assistant web application powered by the Lingshu-7B model.
 
-In addition to the Gradio chat interface, this file now provides a very
-small user management layer built with FastAPI. Users can register and log
-in, their passwords are stored as salted hashes in a SQLite database and a
-simple session cookie is used for authentication. An optional admin panel
-allows toggling subscription status for each user. Only subscribed users can
-access the chat interface.
+The app exposes a Gradio based chat UI themed to resemble LM Studio. Users
+can tweak decoding parameters such as temperature and top-p during
+inference.  A small FastAPI layer provides authentication with optional
+subscription gating.  Conversations are stored in a FAISS index so relevant
+exchanges can be retrieved for context.
 
-The interface supports English and Russian locales. A language switch stores
-the preferred locale in the session and all UI labels are translated.
+Both English and Russian locales are supported via a simple language switch.
 """
 
 import os
@@ -48,24 +46,23 @@ captioner = pipeline(
     device=0 if torch.cuda.is_available() else -1,
 )
 
-# System prompts for both locales. The text is roughly equivalent in Russian
-# and English and instructs the model to reason thoroughly before answering.
+# System prompts for both locales. They instruct the model to provide
+# step-by-step medical reasoning and end with a short disclaimer.
 SYSTEM_PROMPT_EN = (
-    "You are DoctorGPT, an AI assistant helping clinicians. "
-    "Reason carefully step by step, using information from the "
-    "conversation, uploaded documents and web search results. "
-    "Always summarise your reasoning before the final answer and "
-    "include a short disclaimer that your response is not a "
-    "substitute for professional medical advice."
+    "You are DoctorGPT, a medical assistant helping clinicians.\n"
+    "1. Carefully analyse the question and available context from web search,\n"
+    "documents and images.\n"
+    "2. Think through the problem in a detailed chain-of-thought.\n"
+    "3. State your final answer clearly. If uncertain, say so.\n"
+    "Always finish with a reminder that you do not replace a professional doctor."
 )
 
 SYSTEM_PROMPT_RU = (
-    "Вы DoctorGPT, ИИ-помощник для врачей. "
-    "Думайте осторожно и пошагово, используя информацию из беседы, "
-    "загруженных документов и результатов веб-поиска. Всегда кратко "
-    "пересказывайте своё рассуждение перед финальным ответом и "
-    "добавляйте предупреждение, что ответ не заменяет консультацию "
-    "специалиста."
+    "Вы DoctorGPT, медицинский помощник для врачей.\n"
+    "1. Внимательно анализируйте вопрос и контекст из поиска, документов и изображений.\n"
+    "2. Размышляйте последовательно, описывая цепочку рассуждений.\n"
+    "3. Чётко формулируйте итоговый ответ и сообщайте, если не уверены.\n"
+    "В конце напомните, что ответ не заменяет консультацию специалиста."
 )
 
 SYSTEM_PROMPT = {"en": SYSTEM_PROMPT_EN, "ru": SYSTEM_PROMPT_RU}
@@ -197,7 +194,8 @@ MODEL_PATH = os.getenv("MODEL_PATH", "models/Lingshu-7B-Q4_0.gguf")
 
 # Load Llama model and offload layers to GPU if available
 N_GPU_LAYERS = int(os.getenv("N_GPU_LAYERS", "35" if torch.cuda.is_available() else "0"))
-llm = Llama(model_path=MODEL_PATH, n_ctx=4096, n_gpu_layers=N_GPU_LAYERS)
+CONTEXT_SIZE = int(os.getenv("CONTEXT_SIZE", "4096"))
+llm = Llama(model_path=MODEL_PATH, n_ctx=CONTEXT_SIZE, n_gpu_layers=N_GPU_LAYERS)
 
 def search_web(query, k=3):
     """Return web search summaries using DuckDuckGo."""
@@ -238,7 +236,21 @@ def load_documents(files: Iterable[gr.File]) -> str:
                 texts.append(fh.read())
     return "\n".join(texts)
 
-def generate_answer(question, image=None, documents=None, chat_history=None, lang="en"):
+def generate_answer(
+    question,
+    image=None,
+    documents=None,
+    chat_history=None,
+    lang="en",
+    temperature=0.7,
+    top_p=0.95,
+    top_k=40,
+    max_tokens=768,
+    repeat_penalty=1.1,
+    presence_penalty=0.0,
+    frequency_penalty=0.0,
+    system_prompt=None,
+):
     """Generate a response given user question, image and documents."""
 
     chat_history = chat_history or []
@@ -267,13 +279,19 @@ def generate_answer(question, image=None, documents=None, chat_history=None, lan
         "with 'Final Answer:'."
     )
 
+    system_prompt = system_prompt or SYSTEM_PROMPT.get(lang, SYSTEM_PROMPT_EN)
     response = llm.create_chat_completion(
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT.get(lang, SYSTEM_PROMPT_EN)},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.7,
-        max_tokens=768,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        max_tokens=max_tokens,
+        repeat_penalty=repeat_penalty,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
     )
 
     answer = response["choices"][0]["message"]["content"].strip()
@@ -284,20 +302,47 @@ def generate_answer(question, image=None, documents=None, chat_history=None, lan
 
 def create_demo(lang: str) -> gr.Blocks:
     texts = LOCALES[lang]
-    with gr.Blocks() as demo:
+    theme = gr.themes.Soft(primary_hue="green", secondary_hue="blue").set(
+        body_background_fill="*neutral_900",
+        body_text_color="white",
+    )
+    with gr.Blocks(theme=theme) as demo:
         gr.Markdown(f"# {texts['title']}")
-        chatbot = gr.Chatbot()
+        chatbot = gr.Chatbot(height=500)
         state = gr.State([])
 
         with gr.Row():
-            txt = gr.Textbox(label=texts['ask'])
-            img = gr.Image(type="pil", label=texts['image'])
+            txt = gr.Textbox(label=texts['ask'], scale=6)
+            send = gr.Button(texts['send'], scale=1)
+        img = gr.Image(type="pil", label=texts['image'])
         docs = gr.File(label=texts['docs'], file_count="multiple")
-        send = gr.Button(texts['send'])
+
+        with gr.Accordion("Advanced", open=False):
+            temperature = gr.Slider(0.0, 2.0, value=0.7, step=0.05, label="Temperature")
+            top_p = gr.Slider(0.0, 1.0, value=0.95, step=0.01, label="Top-p")
+            top_k = gr.Slider(1, 100, value=40, step=1, label="Top-k")
+            max_tokens = gr.Slider(64, 2048, value=768, step=1, label="Max tokens")
+            repeat_penalty = gr.Slider(0.5, 2.0, value=1.1, step=0.05, label="Repeat penalty")
+            presence_penalty = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Presence penalty")
+            frequency_penalty = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Frequency penalty")
+            system_prompt = gr.Textbox(label="System prompt", value=SYSTEM_PROMPT[lang], lines=3)
 
         send.click(
             partial(generate_answer, lang=lang),
-            inputs=[txt, img, docs, state],
+            inputs=[
+                txt,
+                img,
+                docs,
+                state,
+                temperature,
+                top_p,
+                top_k,
+                max_tokens,
+                repeat_penalty,
+                presence_penalty,
+                frequency_penalty,
+                system_prompt,
+            ],
             outputs=[txt, chatbot, state],
         )
     return demo
