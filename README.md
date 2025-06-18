@@ -2,6 +2,8 @@
 
 This project demonstrates the **Lingshu‑7B** multimodal model running locally with [llama.cpp](https://github.com/ggerganov/llama.cpp).  The web UI is built with Gradio and allows questions about uploaded medical images or a short video.  The model runs with GPU acceleration when available.
 
+All user questions are translated to **English** before being passed to the model. Generated answers are translated back to **Russian** so the chat interface remains entirely in Russian.
+
 ## Requirements
 
 - Python 3.10+

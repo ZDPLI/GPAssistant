@@ -9,6 +9,8 @@ import gradio as gr
 from loguru import logger
 from PIL import Image
 from llama_cpp import Llama, llama_chat_format
+from transformers import pipeline
+import torch
 
 # Paths to model files
 MODEL_PATH = os.getenv("MODEL_PATH", "Lingshu-7B.Q8_0.gguf")
@@ -30,7 +32,28 @@ llama = Llama(
     n_batch=512,
 )
 
+# Translation pipelines for Russian <-> English
+device = 0 if torch.cuda.is_available() else -1
+ru_to_en = pipeline("translation", model="Helsinki-NLP/opus-mt-ru-en", device=device)
+en_to_ru = pipeline("translation", model="Helsinki-NLP/opus-mt-en-ru", device=device)
+
 MAX_NUM_IMAGES = int(os.getenv("MAX_NUM_IMAGES", "5"))
+
+
+def translate_to_en(text: str) -> str:
+    """Translate Russian text to English."""
+    try:
+        return ru_to_en(text)[0]["translation_text"]
+    except Exception:
+        return text
+
+
+def translate_to_ru(text: str) -> str:
+    """Translate English text to Russian."""
+    try:
+        return en_to_ru(text)[0]["translation_text"]
+    except Exception:
+        return text
 
 
 def _url_from_path(path: str) -> str:
@@ -141,14 +164,16 @@ def process_interleaved_images(message: dict) -> list[dict]:
 
 
 def process_new_user_message(message: dict) -> list[dict]:
+    text_en = translate_to_en(message["text"])
     if not message["files"]:
-        return [{"type": "text", "text": message["text"]}]
+        return [{"type": "text", "text": text_en}]
     if message["files"][0].endswith(".mp4"):
-        return [{"type": "text", "text": message["text"]}, *process_video(message["files"][0])]
+        return [{"type": "text", "text": text_en}, *process_video(message["files"][0])]
     if "<image>" in message["text"]:
-        return process_interleaved_images(message)
+        message_local = {"text": text_en, "files": message["files"]}
+        return process_interleaved_images(message_local)
     return [
-        {"type": "text", "text": message["text"]},
+        {"type": "text", "text": text_en},
         *[{"type": "image_url", "image_url": _url_from_path(path)} for path in message["files"]],
     ]
 
@@ -161,7 +186,11 @@ def process_history(history: list[dict]) -> list[dict]:
             if current_user_content:
                 messages.append({"role": "user", "content": current_user_content})
                 current_user_content = []
-            messages.append({"role": "assistant", "content": item["content"]})
+            if isinstance(item["content"], str):
+                assistant_text = translate_to_en(item["content"])
+                messages.append({"role": "assistant", "content": assistant_text})
+            else:
+                messages.append({"role": "assistant", "content": item["content"]})
         else:
             content = item["content"]
             if isinstance(content, str):
@@ -176,8 +205,10 @@ def process_history(history: list[dict]) -> list[dict]:
 def generate_stream(messages: list[dict], max_new_tokens: int) -> Iterator[str]:
     stream = llama.create_chat_completion(
         messages=messages,
-        temperature=0.7,
-        top_p=0.9,
+        temperature=0.2,
+        top_p=0.95,
+        repeat_penalty=1.1,
+        stop=["USER:"],
         max_tokens=max_new_tokens,
         stream=True,
     )
@@ -185,7 +216,7 @@ def generate_stream(messages: list[dict], max_new_tokens: int) -> Iterator[str]:
     for chunk in stream:
         delta = chunk["choices"][0]["delta"].get("content", "")
         output += delta
-        yield output
+        yield translate_to_ru(output)
 
 
 @gr.experimental.Function
@@ -196,7 +227,7 @@ def run(message: dict, history: list[dict], system_prompt: str = "", max_new_tok
 
     messages = []
     if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "system", "content": translate_to_en(system_prompt)})
     messages.extend(process_history(history))
     messages.append({"role": "user", "content": process_new_user_message(message)})
 

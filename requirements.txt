@@ -3,3 +3,5 @@ loguru
 llama-cpp-python>=0.2.73
 opencv-python-headless
 pillow
+torch
+transformers[sentencepiece]
