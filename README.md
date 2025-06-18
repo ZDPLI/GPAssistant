@@ -35,6 +35,11 @@ export MM_PROJ_PATH="$(pwd)/Lingshu-7B.mmproj-Q8_0.gguf"
 export N_GPU_LAYERS=100
 ```
 
+If no GPU is available, the application will automatically fall back to the CPU.
+Model initialization can take a couple of minutes, so please be patient after
+the log line that prints available CPU features.
+```
+
 ## Running
 
 Start the Gradio interface:

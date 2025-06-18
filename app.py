@@ -21,6 +21,9 @@ import pickle
 MODEL_PATH = os.getenv("MODEL_PATH", "Lingshu-7B.Q8_0.gguf")
 MM_PROJ_PATH = os.getenv("MM_PROJ_PATH", "Lingshu-7B.mmproj-Q8_0.gguf")
 GPU_LAYERS = int(os.getenv("N_GPU_LAYERS", "100"))
+if not torch.cuda.is_available():
+    GPU_LAYERS = 0
+logger.info(f"GPU layers: {GPU_LAYERS}")
 
 if not os.path.isfile(MODEL_PATH):
     raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
@@ -32,9 +35,11 @@ chat_handler = llama_chat_format.Llava15ChatHandler(clip_model_path=MM_PROJ_PATH
 llama = Llama(
     model_path=MODEL_PATH,
     chat_handler=chat_handler,
+    chat_format="qwen2",
     n_gpu_layers=GPU_LAYERS,
     n_ctx=4096,
     n_batch=512,
+    verbose=True,
 )
 
 # Embedding setup for episodic memory
