@@ -16,6 +16,8 @@ This project provides a simple web interface built with [Gradio](https://gradio.
 - **Russian and English locales** with a simple language switch.
 - **LM Studio style interface** with dark theme and adjustable decoding
   parameters such as temperature and top-p.
+- **Automatic translation**: user questions are translated to English and
+  the assistant's responses are returned in Russian.
 
 The application detects a CUDA-enabled GPU and will use it automatically for
 faster inference when available using `AutoModelForCausalLM` with

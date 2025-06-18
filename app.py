@@ -19,7 +19,12 @@ import faiss
 
 import gradio as gr
 from duckduckgo_search import DDGS
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    AutoProcessor,
+    pipeline,
+)
 from sentence_transformers import SentenceTransformer
 import torch
 from pypdf import PdfReader
@@ -198,6 +203,15 @@ model = AutoModelForCausalLM.from_pretrained(
     device_map="auto",
 )
 
+# Translation pipelines for input and output
+device = 0 if torch.cuda.is_available() else -1
+translator_ru_en = pipeline(
+    "translation_ru_to_en", model="Helsinki-NLP/opus-mt-ru-en", device=device
+)
+translator_en_ru = pipeline(
+    "translation_en_to_ru", model="Helsinki-NLP/opus-mt-en-ru", device=device
+)
+
 def search_web(query, k=3):
     """Return web search summaries using DuckDuckGo."""
     results = []
@@ -257,7 +271,10 @@ def generate_answer(
     chat_history = chat_history or []
     context_parts: List[str] = []
 
-    memory_snippets = retrieve_memory(question)
+    # Translate question to English for processing
+    question_en = translator_ru_en(question)[0]["translation_text"]
+
+    memory_snippets = retrieve_memory(question_en)
     if memory_snippets:
         context_parts.append("Previous dialogues:\n" + "\n".join(memory_snippets))
 
@@ -267,12 +284,12 @@ def generate_answer(
         if docs_text:
             context_parts.append(f"Document excerpts:\n{docs_text}")
 
-    search_context = search_web(question)
+    search_context = search_web(question_en)
     context_parts.append(f"Search results:\n{search_context}")
     context = "\n".join(context_parts)
 
     user_prompt = (
-        f"Question: {question}\n\nContext:\n{context}\n\n"
+        f"Question: {question_en}\n\nContext:\n{context}\n\n"
         "Please reason step by step, then give your final answer prefixed "
         "with 'Final Answer:'."
     )
@@ -305,9 +322,15 @@ def generate_answer(
             top_k=top_k,
             repetition_penalty=repeat_penalty,
         )
-        answer = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=True).strip()
-    chat_history.append((question, answer))
-    add_to_memory(question, answer)
+        answer = tokenizer.decode(
+            output[0][input_ids.shape[-1]:], skip_special_tokens=True
+        ).strip()
+
+    # Translate model answer to Russian
+    answer_ru = translator_en_ru(answer)[0]["translation_text"]
+
+    chat_history.append((question, answer_ru))
+    add_to_memory(question_en, answer)
     return "", chat_history, chat_history
 
 
