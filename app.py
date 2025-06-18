@@ -80,6 +80,8 @@ LOCALES = {
         "not_admin": "Admin access required.",
         "users": "Users",
         "subscriber": "Subscriber",
+        "start_chat": "Start Chat",
+        "landing_info": "AI medical assistant with multimodal capabilities.",
     },
     "ru": {
         "title": "Медицинский мультимодальный ассистент",
@@ -98,6 +100,8 @@ LOCALES = {
         "not_admin": "Требуются права администратора.",
         "users": "Пользователи",
         "subscriber": "Подписка",
+        "start_chat": "Начать чат",
+        "landing_info": "Медицинский ИИ ассистент с поддержкой нескольких модальностей.",
     },
 }
 
@@ -313,17 +317,21 @@ def generate_answer(
 
 def create_demo(lang: str) -> gr.Blocks:
     texts = LOCALES[lang]
-    theme = gr.themes.Soft(primary_hue="green", secondary_hue="blue").set(
-        body_background_fill="*neutral_900",
-        body_text_color="white",
+    theme = gr.themes.Default(primary_hue="blue").set(
+        body_background_fill="#fafafa",
+        body_text_color="#111",
+        input_background_fill="white",
+        input_text_color="#111",
+        block_background_fill="white",
     )
-    with gr.Blocks(theme=theme) as demo:
+    css = ".input-text input{color:#111}!important;"
+    with gr.Blocks(theme=theme, css=css) as demo:
         gr.Markdown(f"# {texts['title']}")
         chatbot = gr.Chatbot(height=500)
         state = gr.State([])
 
         with gr.Row():
-            txt = gr.Textbox(label=texts['ask'], scale=6)
+            txt = gr.Textbox(label=texts['ask'], scale=6, elem_classes="input-text")
             send = gr.Button(texts['send'], scale=1)
         img = gr.Image(type="pil", label=texts['image'])
         docs = gr.File(label=texts['docs'], file_count="multiple")
@@ -372,7 +380,15 @@ app = gr.mount_gradio_app(app, demo_ru, path="/chat/ru")
 
 
 def render_template(title: str, body: str) -> HTMLResponse:
-    return HTMLResponse(f"<html><head><title>{title}</title></head><body>{body}</body></html>")
+    head = (
+        "<head>"
+        "<meta charset='utf-8'/>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'/>"
+        "<link href='https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css' rel='stylesheet'>"
+        "<script src='https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js'></script>"
+        "</head>"
+    )
+    return HTMLResponse(f"<html>{head}<body class='container'>{body}</body></html>")
 
 
 @app.get("/set_lang/{lang}")
@@ -386,13 +402,13 @@ async def register_form(request: Request):
     lang = get_lang(request)
     t = LOCALES[lang]
     body = (
-        f"<h2>{t['register']}</h2>"
-        f"<form method='post'>"
-        f"<label>{t['username']}</label><input name='username'/><br/>"
-        f"<label>{t['password']}</label><input type='password' name='password'/><br/>"
-        f"<button type='submit'>{t['submit']}</button>"
+        f"<h3 class='center-align'>{t['register']}</h3>"
+        f"<form method='post' class='row'>"
+        f"<div class='input-field col s12'><input id='username' name='username' type='text'/><label for='username'>{t['username']}</label></div>"
+        f"<div class='input-field col s12'><input id='password' name='password' type='password'/><label for='password'>{t['password']}</label></div>"
+        f"<button class='btn waves-effect waves-light' type='submit'>{t['submit']}</button>"
         f"</form>"
-        f"<a href='/login'>{t['login']}</a>"
+        f"<p class='center-align'><a href='/login'>{t['login']}</a></p>"
     )
     return render_template(t['register'], body)
 
@@ -419,13 +435,13 @@ async def login_form(request: Request):
     lang = get_lang(request)
     t = LOCALES[lang]
     body = (
-        f"<h2>{t['login']}</h2>"
-        f"<form method='post'>"
-        f"<label>{t['username']}</label><input name='username'/><br/>"
-        f"<label>{t['password']}</label><input type='password' name='password'/><br/>"
-        f"<button type='submit'>{t['submit']}</button>"
+        f"<h3 class='center-align'>{t['login']}</h3>"
+        f"<form method='post' class='row'>"
+        f"<div class='input-field col s12'><input id='username' name='username' type='text'/><label for='username'>{t['username']}</label></div>"
+        f"<div class='input-field col s12'><input id='password' name='password' type='password'/><label for='password'>{t['password']}</label></div>"
+        f"<button class='btn waves-effect waves-light' type='submit'>{t['submit']}</button>"
         f"</form>"
-        f"<a href='/register'>{t['register']}</a>"
+        f"<p class='center-align'><a href='/register'>{t['register']}</a></p>"
     )
     return render_template(t['login'], body)
 
@@ -458,11 +474,12 @@ async def admin_panel(request: Request):
         for u in db.query(User).all():
             toggle_link = f"/toggle_sub/{u.id}"
             rows.append(
-                f"<tr><td>{u.username}</td><td>{'✔' if u.is_subscriber else ''}</td>"
-                f"<td><a href='{toggle_link}'>{t['subscriber']}</a></td></tr>"
+                f"<tr><td>{u.username}</td>"
+                f"<td>{'✔' if u.is_subscriber else ''}</td>"
+                f"<td><a class='btn-small' href='{toggle_link}'>{t['subscriber']}</a></td></tr>"
             )
-    table = "<table>" + "".join(rows) + "</table>"
-    body = f"<h2>{t['admin_panel']}</h2>" + table + f"<a href='/'>{t['logout']}</a>"
+    table = "<table class='striped'><thead><tr><th>" + t['users'] + "</th><th>" + t['subscriber'] + "</th><th></th></tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+    body = f"<h3 class='center-align'>{t['admin_panel']}</h3>" + table + f"<p class='center-align'><a href='/'>{t['logout']}</a></p>"
     return render_template(t['admin_panel'], body)
 
 
@@ -481,21 +498,38 @@ async def toggle_subscription(request: Request, user_id: int):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def landing(request: Request):
     lang = get_lang(request)
     t = LOCALES[lang]
     user = get_current_user(request)
-    if not user:
-        return RedirectResponse("/login")
-    if not user.is_subscriber:
-        body = f"<p>{t['subscription_required']}</p><a href='/logout'>{t['logout']}</a>"
-        return render_template(t['title'], body)
     body = (
-        f"<h2>{t['title']}</h2>"
-        f"<p><a href='/chat/en'>English</a> | <a href='/chat/ru'>Русский</a></p>"
-        f"<p><a href='/admin'>{t['admin_panel']}</a></p>"
-        f"<p><a href='/logout'>{t['logout']}</a></p>"
+        f"<div class='section center-align'>"
+        f"<h3>{t['title']}</h3>"
+        f"<p>{t['landing_info']}</p>"
+        f"</div>"
     )
+    if user and user.is_subscriber:
+        body += (
+            f"<div class='section center-align'>"
+            f"<a class='btn' href='/chat/en'>English</a> "
+            f"<a class='btn' href='/chat/ru'>Русский</a>"
+            f"</div>"
+            f"<p class='center-align'><a href='/logout'>{t['logout']}</a></p>"
+        )
+    elif user:
+        body += (
+            f"<p class='red-text center-align'>{t['subscription_required']}</p>"
+            f"<p class='center-align'><a href='/logout'>{t['logout']}</a></p>"
+        )
+    else:
+        body += (
+            f"<div class='section center-align'>"
+            f"<a class='btn' href='/login'>{t['login']}</a> "
+            f"<a class='btn' href='/register'>{t['register']}</a>"
+            f"</div>"
+        )
+    if user and user.is_admin:
+        body += f"<p class='center-align'><a href='/admin'>{t['admin_panel']}</a></p>"
     return render_template(t['title'], body)
 
 
