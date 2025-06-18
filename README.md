@@ -37,7 +37,7 @@ GPU via the `N_GPU_LAYERS` environment variable.
    offloaded to GPU. By default all GPU memory is used when available.
 5. Run the app:
    ```bash
-   python app.py
+   uvicorn app:app --host 0.0.0.0 --port 8000
    ```
 6. Open the URL printed by Uvicorn in your browser (default: `http://localhost:8000`).
 
