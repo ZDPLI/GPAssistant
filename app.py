@@ -490,4 +490,23 @@ async def index(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import secrets
+    from gradio.networking import setup_tunnel
+
+    host = "0.0.0.0"
+    port = 8000
+
+    if os.getenv("SHARE", "false").lower() == "true":
+        try:
+            url = setup_tunnel(
+                local_host=host,
+                local_port=port,
+                share_token=secrets.token_urlsafe(32),
+                share_server_address=None,
+                share_server_tls_certificate=None,
+            )
+            print(f"* Running on public URL: {url}")
+        except Exception as exc:
+            print("Could not create share link:", exc)
+
+    uvicorn.run(app, host=host, port=port)

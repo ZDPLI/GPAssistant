@@ -43,7 +43,8 @@ GPU via the `N_GPU_LAYERS` environment variable.
    ```bash
    uvicorn app:app --host 0.0.0.0 --port 8000
    ```
-7. Open the URL printed by Uvicorn in your browser (default: `http://localhost:8000`).
+7. To create a temporary public link, set the environment variable `SHARE=true` before running. A URL will be printed in the console.
+8. Open the URL printed by Uvicorn in your browser (default: `http://localhost:8000`).
 
 Open `/register` to create your first account, then log in at `/login`.
 Users marked as `is_subscriber` can access the assistant. Admin users can
