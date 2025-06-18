@@ -191,6 +191,10 @@ def get_current_user(request: Request):
 
 # Path to GGUF model file
 MODEL_PATH = os.getenv("MODEL_PATH", "models/Lingshu-7B-Q4_0.gguf")
+if not os.path.isfile(MODEL_PATH):
+    raise FileNotFoundError(
+        f"Model file not found at {MODEL_PATH}. Set the MODEL_PATH environment variable to the downloaded .gguf file."
+    )
 
 # Load Llama model and offload layers to GPU if available
 N_GPU_LAYERS = int(os.getenv("N_GPU_LAYERS", "35" if torch.cuda.is_available() else "0"))

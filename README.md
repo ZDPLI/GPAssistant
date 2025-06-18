@@ -31,9 +31,16 @@ GPU via the `N_GPU_LAYERS` environment variable.
    libraries. For GPU acceleration, set the environment variable
    `LLAMA_CUBLAS=1` before installing so the package is compiled with CUDA
    support. Installation may fail if CUDA toolkits are missing.
-2. Place the Lingshu-7B GGUF model file on disk and set the `MODEL_PATH`
-   environment variable to its location (default:
-   `models/Lingshu-7B-Q4_0.gguf`).
+2. Download the Lingshu-7B GGUF model from
+   [Hugging Face](https://huggingface.co/mradermacher/Lingshu-7B-GGUF). A
+   convenient way is:
+   ```bash
+   wget -O models/Lingshu-7B-Q4_0.gguf \
+     https://huggingface.co/mradermacher/Lingshu-7B-GGUF/resolve/main/Lingshu-7B-Q4_0.gguf
+   ```
+   Then set the `MODEL_PATH` environment variable to this file
+   (default: `models/Lingshu-7B-Q4_0.gguf`).
+   The app will check that the path exists on startup.
 3. Set a random `SECRET_KEY` environment variable for session cookies.
 4. (Optional) Set `N_GPU_LAYERS` to control how many layers of the model are
    offloaded to GPU. By default all GPU memory is used when available.
