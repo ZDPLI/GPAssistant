@@ -15,6 +15,10 @@ This project provides a simple web interface built with [Gradio](https://gradio.
 - **Admin panel** for managing subscriptions.
 - **Russian and English locales** with a simple language switch.
 
+The application detects a CUDA-enabled GPU and will use it automatically for
+faster inference. You can control how many layers of the model are offloaded to
+GPU via the `N_GPU_LAYERS` environment variable.
+
 ## Usage
 
 1. Install Python dependencies:
@@ -22,16 +26,20 @@ This project provides a simple web interface built with [Gradio](https://gradio.
    pip install -r requirements.txt
    ```
    Building `llama-cpp-python` requires a C++ compiler and other development
-   libraries. Installation may fail if those dependencies are missing.
+   libraries. For GPU acceleration, set the environment variable
+   `LLAMA_CUBLAS=1` before installing so the package is compiled with CUDA
+   support. Installation may fail if CUDA toolkits are missing.
 2. Place the Lingshu-7B GGUF model file on disk and set the `MODEL_PATH`
    environment variable to its location (default:
    `models/Lingshu-7B-Q4_0.gguf`).
 3. Set a random `SECRET_KEY` environment variable for session cookies.
-4. Run the app:
+4. (Optional) Set `N_GPU_LAYERS` to control how many layers of the model are
+   offloaded to GPU. By default all GPU memory is used when available.
+5. Run the app:
    ```bash
    python app.py
    ```
-5. Open the URL printed by Uvicorn in your browser (default: `http://localhost:8000`).
+6. Open the URL printed by Uvicorn in your browser (default: `http://localhost:8000`).
 
 Open `/register` to create your first account, then log in at `/login`.
 Users marked as `is_subscriber` can access the assistant. Admin users can

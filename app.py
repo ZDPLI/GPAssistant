@@ -113,7 +113,11 @@ LOCALES = {
 # --- Episodic memory setup using FAISS ---
 MEMORY_INDEX_PATH = "memory.index"
 MEMORY_STORE_PATH = "memory.pkl"
-EMBED_MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+# Use GPU for embedding model if available
+EMBED_MODEL = SentenceTransformer(
+    "sentence-transformers/all-MiniLM-L6-v2",
+    device="cuda" if torch.cuda.is_available() else "cpu",
+)
 
 if os.path.exists(MEMORY_INDEX_PATH) and os.path.exists(MEMORY_STORE_PATH):
     memory_index = faiss.read_index(MEMORY_INDEX_PATH)
@@ -191,8 +195,9 @@ def get_current_user(request: Request):
 # Path to GGUF model file
 MODEL_PATH = os.getenv("MODEL_PATH", "models/Lingshu-7B-Q4_0.gguf")
 
-# Load Llama model
-llm = Llama(model_path=MODEL_PATH, n_ctx=4096)
+# Load Llama model and offload layers to GPU if available
+N_GPU_LAYERS = int(os.getenv("N_GPU_LAYERS", "35" if torch.cuda.is_available() else "0"))
+llm = Llama(model_path=MODEL_PATH, n_ctx=4096, n_gpu_layers=N_GPU_LAYERS)
 
 def search_web(query, k=3):
     """Return web search summaries using DuckDuckGo."""
