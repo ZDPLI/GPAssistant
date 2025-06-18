@@ -20,7 +20,7 @@ import faiss
 import gradio as gr
 from duckduckgo_search import DDGS
 from llama_cpp import Llama
-from transformers import pipeline
+from llama_cpp.llama_chat_format import Llava15ChatHandler
 from sentence_transformers import SentenceTransformer
 import torch
 from pypdf import PdfReader
@@ -39,12 +39,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import sessionmaker, declarative_base
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# Load image captioning model
-captioner = pipeline(
-    "image-to-text",
-    model="Salesforce/blip-image-captioning-base",
-    device=0 if torch.cuda.is_available() else -1,
-)
 
 # System prompts for both locales. They instruct the model to provide
 # step-by-step medical reasoning and end with a short disclaimer.
@@ -189,17 +183,21 @@ def get_current_user(request: Request):
     with SessionLocal() as db:
         return db.query(User).filter(User.id == user_id).first()
 
-# Path to GGUF model file
+# Paths to model and multimodal projection
 MODEL_PATH = os.getenv("MODEL_PATH", "models/Lingshu-7B-Q4_0.gguf")
-if not os.path.isfile(MODEL_PATH):
-    raise FileNotFoundError(
-        f"Model file not found at {MODEL_PATH}. Set the MODEL_PATH environment variable to the downloaded .gguf file."
-    )
+MM_PROJ_PATH = os.getenv("MM_PROJ_PATH", "models/Lingshu-7B.mmproj-Q8_0.gguf")
+
+for path, name in [(MODEL_PATH, "MODEL_PATH"), (MM_PROJ_PATH, "MM_PROJ_PATH")]:
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            f"File not found at {path}. Set the {name} environment variable to the downloaded gguf file."
+        )
 
 # Load Llama model and offload layers to GPU if available
 N_GPU_LAYERS = int(os.getenv("N_GPU_LAYERS", "35" if torch.cuda.is_available() else "0"))
 CONTEXT_SIZE = int(os.getenv("CONTEXT_SIZE", "4096"))
-llm = Llama(model_path=MODEL_PATH, n_ctx=CONTEXT_SIZE, n_gpu_layers=N_GPU_LAYERS)
+chat_handler = Llava15ChatHandler(clip_model_path=MM_PROJ_PATH)
+llm = Llama(model_path=MODEL_PATH, chat_handler=chat_handler, n_ctx=CONTEXT_SIZE, n_gpu_layers=N_GPU_LAYERS)
 
 def search_web(query, k=3):
     """Return web search summaries using DuckDuckGo."""
@@ -264,9 +262,13 @@ def generate_answer(
     if memory_snippets:
         context_parts.append("Previous dialogues:\n" + "\n".join(memory_snippets))
 
+    image_data = None
     if image is not None:
-        caption = captioner(image)[0]["generated_text"]
-        context_parts.append(f"Image description: {caption}")
+        import base64, io
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        image_data = f"data:image/png;base64,{b64}"
 
     if documents:
         docs_text = load_documents(documents)
@@ -284,10 +286,15 @@ def generate_answer(
     )
 
     system_prompt = system_prompt or SYSTEM_PROMPT.get(lang, SYSTEM_PROMPT_EN)
+
+    user_content = [{"type": "text", "text": user_prompt}]
+    if image_data:
+        user_content.append({"type": "image_url", "image_url": {"url": image_data}})
+
     response = llm.create_chat_completion(
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": user_content},
         ],
         temperature=temperature,
         top_p=top_p,

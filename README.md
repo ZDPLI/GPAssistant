@@ -7,7 +7,7 @@ This project provides a simple web interface built with [Gradio](https://gradio.
 - **Long chain-of-thought reasoning** guided by a custom system prompt.
 - **Retrieval augmented generation (RAG)** using DuckDuckGo web search.
 - **Episodic memory** stores past conversations in a FAISS index for context.
-- **Multimodal input**: optional image uploads are captioned automatically.
+- **Multimodal input**: images are processed directly by the Lingshu model.
 - **Document ingestion**: text, PDF and DOCX files can be uploaded and will be
   included in the context for the language model.
 - **User accounts**: visitors must register and log in. Only subscribed users
@@ -31,16 +31,19 @@ GPU via the `N_GPU_LAYERS` environment variable.
    libraries. For GPU acceleration, set the environment variable
    `LLAMA_CUBLAS=1` before installing so the package is compiled with CUDA
    support. Installation may fail if CUDA toolkits are missing.
-2. Download the Lingshu-7B GGUF model from
+2. Download the Lingshu-7B GGUF model **and** the accompanying multimodal
+   projection file from
    [Hugging Face](https://huggingface.co/mradermacher/Lingshu-7B-GGUF). A
    convenient way is:
    ```bash
    wget -O models/Lingshu-7B-Q4_0.gguf \
      https://huggingface.co/mradermacher/Lingshu-7B-GGUF/resolve/main/Lingshu-7B-Q4_0.gguf
    ```
-   Then set the `MODEL_PATH` environment variable to this file
-   (default: `models/Lingshu-7B-Q4_0.gguf`).
-   The app will check that the path exists on startup.
+   wget -O models/Lingshu-7B.mmproj-Q8_0.gguf \
+     https://huggingface.co/mradermacher/Lingshu-7B-GGUF/resolve/main/Lingshu-7B.mmproj-Q8_0.gguf
+   ```
+   Then set the `MODEL_PATH` and `MM_PROJ_PATH` environment variables to these
+   files (defaults shown above). The app will check that both paths exist on startup.
 3. Set a random `SECRET_KEY` environment variable for session cookies.
 4. (Optional) Set `N_GPU_LAYERS` to control how many layers of the model are
    offloaded to GPU. By default all GPU memory is used when available.
