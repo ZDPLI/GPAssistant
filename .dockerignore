@@ -1,0 +1,6 @@
+__pycache__
+*.pyc
+memory.index
+memory.pkl
+users.db
+*.gguf

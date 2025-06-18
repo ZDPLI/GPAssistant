@@ -56,3 +56,24 @@ retrieves the most relevant past exchanges to provide additional context.
 ## License
 
 This project is provided as-is for educational purposes.
+
+## Deployment
+
+### Docker
+
+1. Build the image:
+   ```bash
+   docker build -t medical-assistant .
+   ```
+2. Run the container, mounting the model directory and setting environment variables:
+   ```bash
+   docker run -p 8000:8000 \
+     -e MODEL_PATH=/models/Lingshu-7B-Q4_0.gguf \
+     -e SECRET_KEY=$(openssl rand -hex 16) \
+     -v /path/to/models:/models \
+     medical-assistant
+   ```
+
+Persist `users.db` and the FAISS index by mounting a directory at `/app` if you
+want to keep data between restarts.
+
