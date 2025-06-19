@@ -1,2 +1,11 @@
-torch
 gradio
+loguru
+llama-cpp-python>=0.2.73
+opencv-python-headless
+pillow
+torch
+faiss-cpu
+sentence-transformers
+duckduckgo_search
+pdfplumber
+python-docx
